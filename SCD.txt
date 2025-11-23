@@ -1,0 +1,169 @@
+
+
+---------------------SCD-----------------------------------------------
+-----------------------------location---------------
+ALTER TABLE
+    `locations` ADD `start_date` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `land`,
+    ADD `end_date` DATETIME NULL AFTER `start_date`,
+    ADD `is_current` BOOLEAN NOT NULL DEFAULT TRUE AFTER `end_date`;
+
+
+---------------------------------market_informations----------------------------
+ALTER TABLE
+    `market_informations` ADD `start_date` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `prognostizierte_last_kw`,
+    ADD `end_date` DATETIME NULL AFTER `start_date`,
+    ADD `is_current` INT NOT NULL DEFAULT '1' AFTER `end_date`;
+
+------------------------sensors---------------------------------------
+ALTER TABLE
+    `sensors` ADD `start_date` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `ausserbetriebnahmedatum`,
+    ADD `end_date` DATETIME NULL AFTER `start_date`,
+    ADD `is_current` BOOLEAN NOT NULL DEFAULT TRUE AFTER `end_date`;
+
+-----------------------------------wetters-------------------
+
+ALTER TABLE
+    `wetters` ADD `start_date` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `windgeschwindigkeit`,
+    ADD `end_date` DATETIME NULL DEFAULT NULL AFTER `start_date`,
+    ADD `is_current` BOOLEAN NOT NULL DEFAULT TRUE AFTER `end_date`;
+
+-------------------------------------------------------------------------------
+========================SCD_Procedure========================================
+
+---------------------SCD_LOCATION---------------------------------------------
+
+DROP PROCEDURE IF EXISTS scd_upsert_location;
+
+DELIMITER $$
+
+CREATE PROCEDURE scd_upsert_location(
+    IN p_name VARCHAR(200),
+    IN p_stadt VARCHAR(200),
+    IN p_region VARCHAR(200),
+    IN p_land VARCHAR(200)
+)
+BEGIN
+    DECLARE v_name VARCHAR(200);
+    DECLARE v_stadt VARCHAR(200);
+    DECLARE v_region VARCHAR(200);
+    DECLARE v_land VARCHAR(200);
+    
+    SELECT name, stadt, region, land
+    INTO v_name, v_stadt, v_region, v_land
+    FROM locations
+    WHERE name = p_name
+    AND is_current = 1
+    ORDER BY start_date DESC
+    LIMIT 1;
+    
+    IF v_name IS NULL THEN
+        INSERT INTO locations (name, stadt, region, land, start_date, end_date, is_current)
+        VALUES (p_name, p_stadt, p_region, p_land, NOW(), NULL, 1);
+    
+    ELSEIF v_stadt <> p_stadt OR v_region <> p_region OR v_land <> p_land THEN
+        
+        UPDATE locations
+        SET end_date = NOW(), is_current = 0
+        WHERE name = p_name AND is_current = 1;
+        
+        INSERT INTO locations (name, stadt, region, land, start_date, end_date, is_current)
+        VALUES (p_name, p_stadt, p_region, p_land, NOW(), NULL, 1);
+        
+    END IF;
+END$$
+
+DELIMITER ;
+
+----------------------test---------------------------------------
+CALL scd_upsert_location('Shanghai_LoadStation', 'Beijing', 'Beijing', 'China');
+
+SELECT id, name, stadt, region, land, start_date, end_date, is_current 
+FROM locations 
+WHERE name = 'Shanghai_LoadStation'
+ORDER BY start_date;
+
+===========================================================================
+----------------------SCD_MARKET_INFO-------------------------------------
+
+CREATE PROCEDURE scd_upsert_market_info(
+    IN p_strom_prise FLOAT,
+    IN p_prognostizierte_last FLOAT
+)
+BEGIN
+    DECLARE v_strom_prise FLOAT;
+    DECLARE v_prognostizierte_last FLOAT;
+    
+    
+    SELECT strom_prise_euro_pro_kwh, prognostizierte_last_kw
+    INTO v_strom_prise, v_prognostizierte_last
+    FROM market_informations
+    WHERE is_current = 1
+    ORDER BY start_date DESC
+    LIMIT 1;
+    
+   
+    IF v_strom_prise IS NULL THEN
+        INSERT INTO market_informations (
+            strom_prise_euro_pro_kwh, 
+            prognostizierte_last_kw,
+            start_date, 
+            end_date, 
+            is_current
+        ) VALUES (
+            p_strom_prise, 
+            p_prognostizierte_last,
+            NOW(), 
+            NULL, 
+            1
+        );
+    
+   
+    ELSEIF ABS(v_strom_prise - p_strom_prise) > 0.001 
+        OR ABS(v_prognostizierte_last - p_prognostizierte_last) > 0.001 THEN
+        
+       
+        UPDATE market_informations
+        SET end_date = NOW(),
+            is_current = 0
+        WHERE is_current = 1;
+        
+       
+        INSERT INTO market_informations (
+            strom_prise_euro_pro_kwh, 
+            prognostizierte_last_kw,
+            start_date, 
+            end_date, 
+            is_current
+        ) VALUES (
+            p_strom_prise, 
+            p_prognostizierte_last,
+            NOW(), 
+            NULL, 
+            1
+        );
+    END IF;
+END;
+------------------------------------------------------------------------
+------------------------Test-------------------------------------
+
+
+Electricity Price Increase (Price Change Only)
+
+-- Check results
+SELECT 
+    id,
+    strom_prise_euro_pro_kwh as price_euro,
+    prognostizierte_last_kw as forecast_load,
+    DATE_FORMAT(start_date, '%Y-%m-%d %H:%i:%s') as start,
+    COALESCE(DATE_FORMAT(end_date, '%Y-%m-%d %H:%i:%s'), 'Active') as end,
+    is_current
+FROM market_informations
+WHERE strom_prise_euro_pro_kwh = 0.100002
+ORDER BY start_date;
+
+
+=============================
+
+
+
+

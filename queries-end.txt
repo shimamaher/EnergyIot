@@ -1,0 +1,644 @@
+
+
+
+
+/* ===========================================================
+BUSINESS DATABASE (OLTP)
+Complete CREATE + INSERT Script
+=========================================================== */
+--------------------------------------------------------------
+-- 1. TABLE: Zeit (Master Timestamp Table)
+--------------------------------------------------------------
+CREATE TABLE Zeit (
+ZeitStempel DATETIME PRIMARY KEY,
+Datum DATE
+);
+
+INSERT INTO Zeit (ZeitStempel, Datum)
+SELECT DISTINCT
+tmp.Timestamp,
+DATE(tmp.Timestamp)
+FROM smart_grid_dataset_city_hourly_enriched tmp;
+
+
+
+--------------------------------------------------------------
+-- 2. TABLE: ZeitTeil (Date/Time Breakdown)
+--------------------------------------------------------------
+CREATE TABLE ZeitTeil (
+ZeitTeil_ID INT AUTO_INCREMENT PRIMARY KEY,
+ZeitStempel DATETIME,
+Jahr INT,
+Monat INT,
+Stunde INT,
+Quartal VARCHAR(10),
+Wochentag VARCHAR(20),
+FOREIGN KEY (ZeitStempel) REFERENCES Zeit(ZeitStempel)
+);
+
+INSERT INTO ZeitTeil (ZeitStempel, Jahr, Monat, Stunde, Quartal, Wochentag)
+SELECT DISTINCT
+tmp.Timestamp,
+YEAR(tmp.Timestamp),
+MONTH(tmp.Timestamp),
+HOUR(tmp.Timestamp),
+QUARTER(tmp.Timestamp),
+DAYNAME(tmp.Timestamp)
+FROM smart_grid_dataset_city_hourly_enriched tmp;
+
+
+
+--------------------------------------------------------------
+-- 3. TABLE: Standort (Locations)
+--------------------------------------------------------------
+CREATE TABLE Standort (
+Standort_ID INT AUTO_INCREMENT PRIMARY KEY,
+Name VARCHAR(200),
+Stadt VARCHAR(200),
+Region VARCHAR(200),
+Land VARCHAR(200)
+);
+
+INSERT INTO Standort (Name, Stadt, Region, Land)
+SELECT DISTINCT
+tmp.Name,
+tmp.City,
+tmp.Region,
+tmp.Country
+FROM smart_grid_dataset_city_hourly_enriched tmp;
+
+
+
+--------------------------------------------------------------
+-- 4. TABLE: Sensor
+--------------------------------------------------------------
+CREATE TABLE Sensor (
+Sensor_ID INT AUTO_INCREMENT PRIMARY KEY,
+Sensortyp VARCHAR(100),
+Hersteller VARCHAR(100),
+Installationsdatum DATETIME,
+Außerbetriebnahmedatum DATETIME,
+Standort_ID INT,
+FOREIGN KEY (Standort_ID) REFERENCES Standort(Standort_ID)
+);
+
+INSERT INTO Sensor (
+Sensortyp, Hersteller, Installationsdatum, Außerbetriebnahmedatum, Standort_ID
+)
+SELECT DISTINCT
+tmp.SensorTyp,
+tmp.Hersteller,
+tmp.Installationsdatum,
+tmp.Ausserbetriebnahmedatum,
+s.Standort_ID
+FROM smart_grid_dataset_city_hourly_enriched tmp
+JOIN Standort s 
+ON s.Name = tmp.Name AND s.Stadt = tmp.City 
+AND s.Region = tmp.Region AND s.Land = tmp.Country;
+
+
+
+--------------------------------------------------------------
+-- 5. TABLE: Wetter
+--------------------------------------------------------------
+CREATE TABLE Wetter (
+Wetter_ID INT AUTO_INCREMENT PRIMARY KEY,
+Zeitstempel DATETIME,
+Standort_ID INT,
+Temperatur_C FLOAT,
+Luftfeuchtigkeit FLOAT,
+Sonneneinstrahlung FLOAT,
+Windgeschwindigkeit FLOAT,
+FOREIGN KEY (Zeitstempel) REFERENCES Zeit(ZeitStempel),
+FOREIGN KEY (Standort_ID) REFERENCES Standort(Standort_ID)
+);
+
+INSERT INTO Wetter (
+Zeitstempel, Standort_ID,
+Temperatur_C, Luftfeuchtigkeit, Sonneneinstrahlung, Windgeschwindigkeit
+)
+SELECT
+tmp.Timestamp,
+s.Standort_ID,
+tmp.Temperature,
+tmp.Humidity,
+tmp.Sonneneinstrahlung,
+tmp.Windgeschwindigkeit
+FROM smart_grid_dataset_city_hourly_enriched tmp
+JOIN Standort s 
+ON s.Name = tmp.Name AND s.Stadt = tmp.City 
+AND s.Region = tmp.Region AND s.Land = tmp.Country;
+
+
+--------------------------------------------------------------
+-- 6. TABLE: MarketInfo
+--------------------------------------------------------------
+CREATE TABLE MarketInfo (
+MarketInfo_ID INT AUTO_INCREMENT PRIMARY KEY,
+Zeitstempel DATETIME,
+Standort_ID INT,
+Strompreis_EURO_pro_kWh FLOAT,
+Prognostizierte_Last_kW FLOAT,
+FOREIGN KEY (Zeitstempel) REFERENCES Zeit(ZeitStempel),
+FOREIGN KEY (Standort_ID) REFERENCES Standort(Standort_ID)
+);
+
+INSERT INTO MarketInfo (
+Zeitstempel, Standort_ID,
+Strompreis_EURO_pro_kWh, Prognostizierte_Last_kW
+)
+SELECT
+tmp.Timestamp,
+s.Standort_ID,
+tmp.Electricity_Price,
+tmp.Predicted_Load
+FROM smart_grid_dataset_city_hourly_enriched tmp
+JOIN Standort s 
+ON s.Name = tmp.Name AND s.Stadt = tmp.City 
+AND s.Region = tmp.Region AND s.Land = tmp.Country;
+
+
+
+--------------------------------------------------------------
+-- 7. TABLE: EnergieAblesung (Main Fact-like Operational Table)
+--------------------------------------------------------------
+CREATE TABLE EnergieAblesung (
+Lesung_ID BIGINT AUTO_INCREMENT PRIMARY KEY,
+Sensor_ID INT,
+Zeitstempel DATETIME,
+Standort_ID INT,
+MarketInfo_ID INT,
+
+Spannung_V FLOAT,
+Stromstärke_A FLOAT,
+Energieverbrauch_kW FLOAT,
+Blindleistung_kvar FLOAT,
+Leistungsfaktor FLOAT,
+Solarleistung_kW FLOAT,
+Windleistung_kW FLOAT,
+Netzversorgung_kW FLOAT,
+Spannungsabweichung FLOAT,
+Überlastungszustand TINYINT(1),
+Transformatorfehler TINYINT(1),
+Temperatur_C FLOAT,
+Luftfeuchtigkeit FLOAT,
+Strompreis_Euro_pro_kWh FLOAT,
+Prognostizierte_Last_kW FLOAT,
+
+FOREIGN KEY (Sensor_ID) REFERENCES Sensor(Sensor_ID),
+FOREIGN KEY (Zeitstempel) REFERENCES Zeit(ZeitStempel),
+FOREIGN KEY (Standort_ID) REFERENCES Standort(Standort_ID),
+FOREIGN KEY (MarketInfo_ID) REFERENCES MarketInfo(MarketInfo_ID)
+);
+
+INSERT INTO EnergieAblesung (
+Sensor_ID, Zeitstempel, Standort_ID, MarketInfo_ID,
+Spannung_V, Stromstärke_A, Energieverbrauch_kW, Blindleistung_kvar,
+Leistungsfaktor, Solarleistung_kW, Windleistung_kW, Netzversorgung_kW,
+Spannungsabweichung, Überlastungszustand, Transformatorfehler,
+Temperatur_C, Luftfeuchtigkeit, Strompreis_Euro_pro_kWh, Prognostizierte_Last_kW
+)
+SELECT
+se.Sensor_ID,
+tmp.Timestamp,
+st.Standort_ID,
+mi.MarketInfo_ID,
+
+tmp.Spannung_V,
+tmp.Stromstaerke_A,
+tmp.Energieverbrauch_kW,
+tmp.Blindleistung_kvar,
+tmp.Leistungsfaktor,
+tmp.Solarleistung_kW,
+tmp.Windleistung_kW,
+tmp.Netzversorgung_kW,
+tmp.Spannungsabweichung,
+tmp.Ueberlastungszustand,
+tmp.Transformatorfehler,
+tmp.Temperature,
+tmp.Humidity,
+tmp.Electricity_Price,
+tmp.Predicted_Load
+
+FROM smart_grid_dataset_city_hourly_enriched tmp
+JOIN Standort st 
+ON st.Name = tmp.Name AND st.Stadt = tmp.City 
+AND st.Region = tmp.Region AND st.Land = tmp.Country
+JOIN Sensor se
+ON se.Hersteller = tmp.Hersteller 
+AND se.Sensortyp = tmp.SensorTyp
+JOIN MarketInfo mi
+ON mi.Zeitstempel = tmp.Timestamp 
+AND mi.Standort_ID = st.Standort_ID;
+
+
+
+
+
+/* ===========================================================
+DATA WAREHOUSE (DWH) - COMPLETE CREATE TABLE SCRIPT
+=========================================================== */
+
+
+/* -------------------- DIM_ZEIT -------------------- */
+
+CREATE TABLE zeits (
+zeit_key INT AUTO_INCREMENT PRIMARY KEY,
+zeitstempel DATETIME NOT NULL,
+datum DATE NOT NULL,
+monat INT NOT NULL,
+jahr INT NOT NULL,
+stunde INT NOT NULL,
+quartal INT NOT NULL,
+wochen_tag INT NOT NULL,
+UNIQUE KEY uk_dim_zeit (zeitstempel)
+);
+
+
+/* -------------------- DIM_WETTER -------------------- */
+
+CREATE TABLE wetters (
+wetter_key INT AUTO_INCREMENT PRIMARY KEY,
+temperature_c FLOAT,
+luftfeuchtigkeit FLOAT,
+sonneneinstrahlung FLOAT,
+windgeschwindigkeit FLOAT
+);
+
+
+/* -------------------- DIM_SENSOR -------------------- */
+
+CREATE TABLE sensors (
+sensor_key INT AUTO_INCREMENT PRIMARY KEY,
+sensor_number VARCHAR(200),
+sensor_type VARCHAR(100),
+hersteller VARCHAR(100),
+installationsdatum DATETIME,
+ausserbetriebnahmedatum DATETIME,
+UNIQUE KEY uk_dim_sensor (sensor_number)
+);
+
+
+/* -------------------- DIM_LOCATION -------------------- */
+
+CREATE TABLE locations (
+location_key INT AUTO_INCREMENT PRIMARY KEY,
+name VARCHAR(200),
+stadt VARCHAR(200),
+region VARCHAR(200),
+land VARCHAR(200),
+UNIQUE KEY uk_dim_location (name, stadt, region, land)
+);
+
+
+/* -------------------- DIM_MARKETINFO -------------------- */
+
+CREATE TABLE market_informations (
+marketinfo_key INT AUTO_INCREMENT PRIMARY KEY,
+strom_prise_euro_pro_kwh FLOAT,
+prognostizierte_last_kw FLOAT
+);
+
+
+/* -------------------- FACT_ENERGIE_ABLESUNG -------- */
+
+CREATE TABLE energie_ablesungs (
+energy_fact_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+
+zeit_key INT NOT NULL,
+wetter_key INT,
+sensor_key INT,
+location_key INT,
+marketinfo_key INT,
+
+spannung_v FLOAT,
+stromstaerke_a FLOAT,
+energieverbrauch_kw FLOAT,
+blindleistung_kvar FLOAT,
+leistungsfaktor FLOAT,
+solarleistung_kw FLOAT,
+windleistung_kw FLOAT,
+netzversorgung_kw FLOAT,
+spannungsabweichung FLOAT,
+ueberlastungszustand TINYINT(1),
+transformatorfehler TINYINT(1),
+temperatur_c FLOAT,
+luftfeuchtigkeit FLOAT,
+strompreis_euro_pro_kwh FLOAT,
+prognostizierte_last_kw FLOAT,
+
+FOREIGN KEY (zeit_key) REFERENCES dim_zeit(zeit_key),
+FOREIGN KEY (wetter_key) REFERENCES dim_wetter(wetter_key),
+FOREIGN KEY (sensor_key) REFERENCES dim_sensor(sensor_key),
+FOREIGN KEY (location_key) REFERENCES dim_location(location_key),
+FOREIGN KEY (marketinfo_key) REFERENCES dim_marketinfo(marketinfo_key)
+);
+
+
+
+------------------------------------------------------------------------------
+
+----------------------------------------------------------
+--------------------------Insert Scripts---------------------
+
+INSERT INTO zeits (zeitstempel, datum, monat, jahr, stunde, quartal, wochen_tag)
+SELECT 
+    tmp.Timestamp, 
+    DATE(tmp.Timestamp), 
+    MONTH(tmp.Timestamp), 
+    YEAR(tmp.Timestamp), 
+    HOUR(tmp.Timestamp), 
+    QUARTER(tmp.Timestamp), 
+    DAYOFWEEK(tmp.Timestamp)
+FROM `smart_grid_dataset_city_hourly_enriched` tmp;
+
+---------------------------------------------------------------------------------
+
+
+INSERT INTO wetters(
+    temperature_c,
+    luftfeuchtigkeit,
+    sonneneinstrahlung,
+    windgeschwindigkeit
+)
+SELECT
+    tmp.Temperature,
+    tmp.Humidity,
+    tmp.Sonneneinstrahlung,
+    tmp.Windgeschwindigkeit
+FROM
+    `smart_grid_dataset_city_hourly_enriched` tmp;
+
+--------------------------------------------------------------------------------------
+
+
+INSERT INTO sensors(
+    sensor_number,
+    sensor_type,
+    hersteller,
+    installationsdatum,
+    ausserbetriebnahmedatum
+)
+SELECT
+    tmp.Sensor_ID,
+    tmp.SensorTyp,
+    tmp.Hersteller,
+    tmp.Installationsdatum,
+    tmp.Ausserbetriebnahmedatum
+FROM
+    `smart_grid_dataset_city_hourly_enriched` tmp;
+
+---------------------------------------------------------------------------------------
+
+INSERT INTO locations(NAME, stadt, region, land)
+SELECT
+    tmp.Name,
+    tmp.City,
+    tmp.region,
+    tmp.Country
+FROM
+    `smart_grid_dataset_city_hourly_enriched` tmp;
+----------------------------------------------
+
+INSERT INTO market_informations(
+    strom_prise_euro_pro_kwh,
+    prognostizierte_last_kw
+)
+SELECT
+    tmp.Electricity_Price,
+    tmp.Predicted_Load
+FROM
+    `smart_grid_dataset_city_hourly_enriched` tmp;
+
+
+
+
+---------------------------------------------------------------------------------------
+
+
+
+---------------cleanup procedure to delete the duplicates from locations table--------------------------------------------------------------------
+DELIMITER $$
+
+CREATE PROCEDURE cleanup_locations()
+BEGIN
+    DELETE FROM locations
+    WHERE id NOT IN (
+        SELECT id FROM (
+            SELECT MIN(id) AS id
+            FROM locations
+            GROUP BY name, stadt, region, land
+        ) AS keepers
+    );
+END$$
+
+DELIMITER ;
+
+------create a extra column (location_id) in `smart_grid_dataset_city_hourly_enriched` --------
+ALTER TABLE smart_grid_dataset_city_hourly_enriched
+ADD COLUMN location_id INT;
+
+----------------- fill location_id in `smart_grid_dataset_city_hourly_enriched` --------------------
+DELIMITER $$
+
+CREATE PROCEDURE fill_location_ids()
+BEGIN
+    UPDATE smart_grid_dataset_city_hourly_enriched AS s
+    JOIN locations AS l
+      ON s.Name = l.name
+    SET s.location_id = l.id;
+END$$
+
+DELIMITER ;
+----------------------------------------------------------------------------------------------------
+--------------cleanup procedure to delete the duplicates from sensors table--------------------------
+DELIMITER $$
+
+CREATE PROCEDURE cleanup_sensors()
+BEGIN
+    DELETE FROM sensors
+    WHERE id NOT IN (
+        SELECT id FROM (
+            SELECT MIN(id) AS id
+            FROM sensors
+            GROUP BY sensor_number
+        ) AS keepers
+    );
+END$$
+
+DELIMITER ;
+
+------create a extra column sensor_id in `smart_grid_dataset_city_hourly_enriched` -----------------------
+
+ALTER TABLE smart_grid_dataset_city_hourly_enriched
+ADD COLUMN sensor_id INT;
+
+----------------- fill sensor_id in `smart_grid_dataset_city_hourly_enriched` --------------------
+DELIMITER $$
+
+CREATE PROCEDURE fill_sensor_ids()
+BEGIN
+    UPDATE smart_grid_dataset_city_hourly_enriched AS s
+    JOIN sensors AS sen
+      ON s.Sensor_number= sen.sensor_number
+    SET s.sensor_id = sen.id;
+END$$
+
+DELIMITER ;
+----------------------------------------------------------------------------------------------------
+
+--------------cleanup procedure to delete the duplicates from market_informations table--------------------------
+DELIMITER $$
+
+CREATE PROCEDURE cleanup_market_informations()
+BEGIN
+    DELETE FROM market_informations
+    WHERE id NOT IN (
+        SELECT id FROM (
+            SELECT MIN(id) AS id
+            FROM market_informations
+            GROUP BY strom_prise_euro_pro_kwh, prognostizierte_last_kw
+        ) AS keepers
+    );
+END$$
+
+DELIMITER ;
+
+------create a extra column market_location_id in `smart_grid_dataset_city_hourly_enriched` -----------------------
+
+ALTER TABLE smart_grid_dataset_city_hourly_enriched
+ADD COLUMN market_location_id INT;
+
+----------------- fill market_location_id in `smart_grid_dataset_city_hourly_enriched` --------------------
+DELIMITER $$
+
+CREATE PROCEDURE fill_market_location_ids()
+BEGIN
+    UPDATE smart_grid_dataset_city_hourly_enriched AS s
+    JOIN market_locations AS ml
+      ON ROUND(s.Electricity_Price,2) = ROUND(ml.strom_prise_euro_pro_kwh,2)
+	AND ROUND(s.Predicted_Load,2) = ROUND(ml.prognostizierte_last_kw,2) 
+    SET s.market_location_id  = ml.id;
+END$$
+
+DELIMITER ;
+
+--------------cleanup procedure to delete the duplicates from wetter table--------------------------
+DELIMITER $$
+
+CREATE PROCEDURE cleanup_wetters()
+BEGIN
+    DELETE FROM wetters
+    WHERE id NOT IN (
+        SELECT id FROM (
+            SELECT MIN(id) AS id
+            FROM wetters
+            GROUP BY temperature_c,luftfeuchtigkeit,sonneneinstrahlung,windgeschwindigkeit 	
+        ) AS keepers
+    );
+END$$
+
+DELIMITER ;
+
+------create a extra column wetter_id in `smart_grid_dataset_city_hourly_enriched` -----------------------
+
+ALTER TABLE smart_grid_dataset_city_hourly_enriched
+ADD COLUMN wetter_id INT;
+
+----------------- fill wetter_id in `smart_grid_dataset_city_hourly_enriched` --------------------
+DELIMITER $$
+
+CREATE PROCEDURE fill_wetter_ids()
+BEGIN
+    UPDATE smart_grid_dataset_city_hourly_enriched AS s
+    JOIN wetters AS w
+      ON ROUND(s.Temperature,2) = ROUND(w.temperature_c,2)
+	AND ROUND(s.Humidity,2) = ROUND(w.luftfeuchtigkeit,2) 
+	AND ROUND(s.Sonneneinstrahlung,2) = ROUND(w.sonneneinstrahlung,2) 
+	AND ROUND(s.Windgeschwindigkeit,2) = ROUND(w.windgeschwindigkeit,2) 
+    SET s.wetter_id  = w.id;
+END$$
+
+DELIMITER ;
+
+----------Drop useless table zeit----------------------------------------------------------------------
+DROP TABLE `energy_iot`.`zeits`
+
+------------------------fill energie_ablesungs from `smart_grid_dataset_city_hourly_enriched` ------------------------------------------------
+INSERT INTO energie_ablesungs(
+    read_at,
+    location_id,
+    sensor_id,
+    wetter_id,
+    market_information_id,
+    spannung_v,
+    spannungsabweichung,
+    stromstaerke_a,
+    energieverbrauch_kw,
+    blindleistung_kvar,
+    leistungsfaktor,
+    solarleistung_kw,
+    windleistung_kw,
+    netzversorgung_kw,
+    ueberlastungszustand,
+    transformatorfehler,
+    temperatur_c,
+    luftfeuchtigkeit,
+    strompreis_euro_pro_kwh,
+    prognostizierte_last_kw
+)
+SELECT
+    tmp.Timestamp,
+    tmp.location_id,
+    tmp.sensor_id,
+    tmp.wetter_id,
+    tmp.market_information_id,
+    tmp.Voltage,
+    tmp.Voltage_Fluctuation,
+    tmp.Current,
+    tmp.Power_Consumption,
+    tmp.Reactive_Power,
+    tmp.Power_Factor,
+    tmp.Solar_Power,
+    tmp.Wind_Power,
+    tmp.GridSupply,
+    tmp.Overload_Condition,
+    tmp.Transformer_Fault,
+    tmp.Temperature,
+    tmp.Humidity,
+    tmp.Electricity_Price,
+    tmp.Predicted_Load
+    
+FROM
+    `smart_grid_dataset_city_hourly_enriched` tmp;
+-------------------------------------------------------------
+---------------SCD-------------------------------------
+ALTER TABLE 
+    `locations` ADD `start_date` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `land`, 
+    ADD `end_date` DATETIME NULL DEFAULT NULL AFTER `start_date`, 
+    ADD `is_current` BOOLEAN NOT NULL DEFAULT TRUE AFTER `end_date`; 
+
+
+--------------------------------------------
+ALTER TABLE
+    `sensors` ADD `start_date` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `ausserbetriebnahmedatum`,
+    ADD `end_date` DATETIME NULL DEFAULT NULL AFTER `start_date`,
+    ADD `is_current` BOOLEAN NOT NULL DEFAULT TRUE AFTER `end_date`;
+
+----------------------------------------------
+
+ALTER TABLE
+    `market_informations` ADD `start_date` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `prognostizierte_last_kw`,
+    ADD `end_date` DATETIME NULL DEFAULT NULL AFTER `start_date`,
+    ADD `is_current` BOOLEAN NOT NULL DEFAULT TRUE AFTER `end_date`;
+
+
+--------------------------------------------------
+
+ALTER TABLE
+    `wetters` ADD `start_date` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER `windgeschwindigkeit`,
+    ADD `end_date` DATETIME NULL DEFAULT NULL AFTER `start_date`,
+    ADD `is_current` BOOLEAN NOT NULL DEFAULT TRUE AFTER `end_date`;
+----------------------------ende SCD-------------------------------------------------
+
+
